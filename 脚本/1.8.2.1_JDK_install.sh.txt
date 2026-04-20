@@ -1,0 +1,38 @@
+
+# 配置
+PASSWORD="qwe@123"
+SOFT_DIR="/root"
+INSTALL_BASE="/usr/local"
+LOG="/root/install_jdk.log"
+
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+log_warn() { echo -e "${YELLOW}[WARN] $*${NC}" | tee -a $LOG; }
+log_error() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+# 检查root
+[ $EUID -ne 0 ] && log_error "必须 root 执行"
+
+log_info "开始安装 JDK 17"
+JDK_FILE="${SOFT_DIR}/jdk-17.0.1_linux-x64_bin.tar.gz"
+
+[ ! -f "$JDK_FILE" ] && log_error "❌ 致命错误：JDK 本地包不存在！请检查路径: $JDK_FILE"
+
+# 解压
+tar zxf "$JDK_FILE" -C $INSTALL_BASE
+JDK_DIR=$(tar tf $JDK_FILE | head -1 | cut -d/ -f1)
+ln -sfn $INSTALL_BASE/$JDK_DIR $INSTALL_BASE/jdk
+
+# 环境变量
+cat > /etc/profile.d/java.sh <<EOF
+export JAVA_HOME=/usr/local/jdk
+export PATH=\$JAVA_HOME/bin:\$PATH
+export CLASSPATH=.:\$JAVA_HOME/lib
+EOF
+
+source /etc/profile.d/java.sh
+log_info "✅ JDK 安装完成：$(java -version 2>&1 | head -1)"

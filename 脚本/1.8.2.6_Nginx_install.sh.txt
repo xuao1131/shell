@@ -1,0 +1,74 @@
+#!/bin/bash
+clear
+
+# ==================== Nginx 最终稳定脚本 ====================
+# 适配：CentOS7 | 有包用包 | 无包自动yum | 标准systemd服务
+# ==============================================================
+
+LOG="/root/install_nginx.log"
+RED='\033[31m'
+GREEN='\033[32m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+err() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+# 1. 检查ROOT权限
+[ $EUID -ne 0 ] && err "必须使用 root 用户执行"
+
+# 2. 安装依赖
+log "安装依赖包..."
+yum install -y gcc pcre-devel zlib-devel openssl-devel
+systemctl stop nginx 2>/dev/null
+pkill -f nginx 2>/dev/null
+
+# 3. 检测本地安装包
+NGINX_FILE="/root/nginx-1.18.0.tar.gz"
+
+if [ -f "$NGINX_FILE" ]; then
+    log "使用本地压缩包安装 Nginx..."
+    tar zxf "$NGINX_FILE" -C /tmp
+    cd /tmp/nginx-1.18.0
+    ./configure --prefix=/usr/local/nginx
+    make && make install
+else
+    log "使用 YUM 安装 Nginx..."
+    yum install -y nginx
+fi
+
+# 4. 配置 systemd 标准服务（永不自动终止）
+log "配置 systemd 服务..."
+cat > /etc/systemd/system/nginx.service <<EOF
+[Unit]
+Description=Nginx HTTP Server
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/usr/local/nginx/logs/nginx.pid
+ExecStart=/usr/local/nginx/sbin/nginx
+ExecReload=/usr/local/nginx/sbin/nginx -s reload
+ExecStop=/usr/local/nginx/sbin/nginx -s stop
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 5. 启动服务
+log "启动 Nginx..."
+systemctl daemon-reload
+systemctl enable nginx
+systemctl start nginx
+
+# 6. 检查结果
+sleep 2
+if systemctl is-active --quiet nginx; then
+    log "========================================"
+    log "✅ Nginx 安装启动成功！"
+    log "✅ 访问地址：http://192.168.81.24"
+    log "========================================"
+else
+    err "❌ Nginx 启动失败！"
+fi

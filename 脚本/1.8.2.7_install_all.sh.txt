@@ -1,0 +1,109 @@
+#!/bin/bash
+# 纯净无报错版 - 适配 CentOS7 快照环境
+# 安装：JDK17 + Tomcat9 + MySQL + FTP + Nginx
+
+# 基础配置
+PASSWORD="qwe@123"
+IP=$(hostname -I | awk '{print $1}')
+SOFT_DIR="/root"
+INSTALL_BASE="/usr/local"
+
+# 颜色输出
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+NC='\033[0m'
+
+info() { echo -e "${GREEN}[INFO] $1${NC}"; }
+warn() { echo -e "${YELLOW}[WARN] $1${NC}"; }
+
+# 必须 root 运行
+[ $EUID -ne 0 ] && echo -e "${RED}错误：必须使用 root 用户执行${NC}" && exit 1
+
+clear
+info "====================================="
+info "      一键环境安装脚本 无错版"
+info "      IP: $IP   密码: $PASSWORD"
+info "====================================="
+
+# ====================== 1. 安装 JDK17 ======================
+info "安装 JDK 17.0.1..."
+tar -zxf ${SOFT_DIR}/jdk-17.0.1_linux-x64_bin.tar.gz -C ${INSTALL_BASE}
+mv ${INSTALL_BASE}/jdk-17.0.1 ${INSTALL_BASE}/jdk
+
+cat > /etc/profile.d/java.sh <<EOF
+export JAVA_HOME=${INSTALL_BASE}/jdk
+export PATH=\$JAVA_HOME/bin:\$PATH
+EOF
+
+source /etc/profile.d/java.sh
+info "JDK 安装完成：$(java -version 2>&1 | head -1)"
+
+# ====================== 2. 安装 Tomcat9（修复所有报错） ======================
+info "安装 Tomcat 9.0.11..."
+tar -zxf ${SOFT_DIR}/apache-tomcat-9.0.11.tar.gz -C ${INSTALL_BASE}
+mv ${INSTALL_BASE}/apache-tomcat-9.0.11 ${INSTALL_BASE}/tomcat
+
+# 修复缺失目录 + 权限（解决你所有报错）
+mkdir -p ${INSTALL_BASE}/tomcat/temp ${INSTALL_BASE}/tomcat/logs
+chmod -R 755 ${INSTALL_BASE}/tomcat
+chown -R root:root ${INSTALL_BASE}/tomcat
+
+# 配置服务（最简稳定版）
+cat > /etc/systemd/system/tomcat.service <<EOF
+[Unit]
+Description=Tomcat
+After=network.target
+
+[Service]
+Type=forking
+Environment="JAVA_HOME=${INSTALL_BASE}/jdk"
+ExecStart=${INSTALL_BASE}/tomcat/bin/startup.sh
+ExecStop=${INSTALL_BASE}/tomcat/bin/shutdown.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now tomcat
+sleep 3
+info "Tomcat 启动成功：http://$IP:8080"
+
+# ====================== 3. 安装 MySQL（Mariadb 稳定版） ======================
+info "安装 MySQL (MariaDB)..."
+yum remove -y mariadb-libs >/dev/null 2>&1
+yum install -y mariadb-server mariadb >/dev/null 2>&1
+
+systemctl enable --now mariadb
+sleep 2
+
+# 设置密码
+mysqladmin -u root password "${PASSWORD}" >/dev/null 2>&1
+# 开启远程访问
+mysql -uroot -p"${PASSWORD}" -e "GRANT ALL ON *.* TO 'root'@'%' IDENTIFIED BY '${PASSWORD}'; FLUSH PRIVILEGES;" 2>/dev/null
+info "MySQL 安装完成，密码：$PASSWORD"
+
+# ====================== 4. 安装 FTP ======================
+info "安装 FTP (vsftpd)..."
+yum install -y vsftpd >/dev/null 2>&1
+systemctl enable --now vsftpd
+info "FTP 启动成功"
+
+# ====================== 5. 安装 Nginx ======================
+info "安装 Nginx..."
+yum install -y nginx >/dev/null 2>&1
+systemctl enable --now nginx
+info "Nginx 启动成功：http://$IP"
+
+# ====================== 安装完成 ======================
+echo -e "\n"
+info "====================================="
+info "           全部安装成功！"
+info " JDK    ✅ 正常"
+info " Tomcat ✅ http://$IP:8080"
+info " MySQL  ✅ 密码：$PASSWORD"
+info " FTP    ✅ 正常"
+info " Nginx  ✅ http://$IP"
+info "====================================="

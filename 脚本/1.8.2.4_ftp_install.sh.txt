@@ -1,0 +1,83 @@
+G="/root/install_ftp.log"
+RED='\033[31m'
+GREEN='\033[32m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+log_error() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+# 1. 检查 ROOT 权限
+[[ $EUID -ne 0 ]] && log_error "必须使用 root 用户执行本脚本"
+
+# 2. 安装 vsftpd
+log_info "安装 vsftpd 服务..."
+yum install -y vsftpd
+
+# 3. 备份原有配置
+if [ -f "/etc/vsftpd/vsftpd.conf" ]; then
+    cp /etc/vsftpd/vsftpd.conf /etc/vsftpd/vsftpd.conf.bak.$(date +%Y%m%d)
+    log_info "已备份原配置文件"
+fi
+
+# 4. 写入标准配置
+log_info "配置 FTP 参数..."
+cat > /etc/vsftpd/vsftpd.conf <<EOF
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+local_umask=022
+dirmessage_enable=YES
+xferlog_enable=YES
+connect_from_port_20=YES
+xferlog_std_format=YES
+listen=NO
+listen_ipv6=YES
+pam_service_name=vsftpd
+userlist_enable=YES
+tcp_wrappers=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+EOF
+
+# 5. 允许 root 用户登录
+echo "root" > /etc/vsftpd/user_list
+log_info "已配置 root 用户允许 FTP 登录"
+
+# 6. 配置 systemd 服务（核心：防止服务退出）
+log_info "配置 systemd 服务..."
+cat > /etc/systemd/system/vsftpd.service <<EOF
+[Unit]
+Description=Vsftpd FTP Daemon
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/vsftpd /etc/vsftpd/vsftpd.conf
+ExecStop=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 7. 重启并验证服务
+log_info "启动 FTP 服务..."
+systemctl daemon-reload
+systemctl enable vsftpd
+systemctl restart vsftpd
+
+# 8. 最终状态校验
+sleep 3
+if systemctl is-active --quiet vsftpd; then
+    log_info "========================================"
+    log_info "✅ FTP 安装启动成功！"
+    log_info "✅ 访问地址：ftp://192.168.81.24"
+    log_info "✅ 登录用户：root   密码：系统Root密码"
+    log_info "========================================"
+else
+    log_error "❌ FTP 启动失败！请执行 journalctl -u vsftpd.service 查看详情"
+fi
+

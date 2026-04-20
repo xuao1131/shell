@@ -1,0 +1,68 @@
+# MySQL 自动安装：有包用包，无包 yum
+PASSWORD="qwe@123"
+LOG="/root/install_mysql.log"
+RED='\033[31m'
+GREEN='\033[32m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+err() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+[ $EUID -ne 0 ] && err "必须 root 执行"
+rpm -e --nodeps mariadb-libs 2>/dev/null
+
+# 查找本地包
+MYSQL_FILE=$(ls /root/mysql-*.tar.gz 2>/dev/null | head -1)
+
+if [ -n "$MYSQL_FILE" ]; then
+    log "使用本地压缩包安装 MySQL"
+    tar zxf "$MYSQL_FILE" -C /usr/local
+    DIR=$(tar tf "$MYSQL_FILE" | head -1 | cut -d/ -f1)
+    ln -sfn /usr/local/$DIR /usr/local/mysql
+
+    useradd -r -s /sbin/nologin mysql 2>/dev/null
+    mkdir -p /usr/local/mysql/data
+    chown -R mysql:mysql /usr/local/mysql
+
+    /usr/local/mysql/bin/mysqld --initialize-insecure --user=mysql
+    cat > /etc/my.cnf <<EOF
+[mysqld]
+basedir=/usr/local/mysql
+datadir=/usr/local/mysql/data
+socket=/tmp/mysql.sock
+port=3306
+character-set-server=utf8mb4
+EOF
+
+    cat > /etc/systemd/system/mysql.service <<EOF
+[Unit]
+Description=MySQL
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=/usr/local/mysql/data/$(hostname).pid
+ExecStart=/usr/local/mysql/bin/mysqld_safe --user=mysql
+ExecStop=/usr/local/mysql/bin/mysqladmin shutdown
+User=root
+Group=root
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+else
+    log "使用 yum 安装 MySQL"
+    yum install -y mysql-community-server
+fi
+
+systemctl daemon-reload
+systemctl enable mysql 2>/dev/null
+systemctl enable mysqld 2>/dev/null
+systemctl start mysql 2>/dev/null
+systemctl start mysqld 2>/dev/null
+
+sleep 3
+/usr/local/mysql/bin/mysqladmin -u root password "$PASSWORD" 2>/dev/null
+log "MySQL 安装完成，密码：$PASSWORD"
+

@@ -1,0 +1,99 @@
+AT_FILE="/root/apache-tomcat-9.0.11.tar.gz"
+INSTALL_BASE="/usr/local"
+TOMCAT_DIR="apache-tomcat-9.0.11"
+TOMCAT_HOME="${INSTALL_BASE}/tomcat"
+LOG="/root/install_tomcat.log"
+
+# 颜色输出
+RED='\033[31m'
+GREEN='\033[32m'
+YELLOW='\033[33m'
+NC='\033[0m'
+
+log_info() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+log_error() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+# 1. 检查 ROOT 权限
+[[ $EUID -ne 0 ]] && log_error "必须使用 root 执行"
+
+# 2. 检查 JDK
+log_info "检查 JDK 环境..."
+source /etc/profile.d/java.sh 2>/dev/null
+[[ ! -x "/usr/local/jdk/bin/java" ]] && log_error "请先安装 JDK"
+log_info "JDK 环境正常"
+
+# 3. 检查安装包（核心修复：直接用 -f 判断，绝对不会错）
+log_info "检查 Tomcat 安装包..."
+if [[ ! -f "/root/apache-tomcat-9.0.11.tar.gz" ]]; then
+    log_error "未找到安装包：/root/apache-tomcat-9.0.11.tar.gz"
+fi
+log_info "安装包正常：$(ls /root/apache-tomcat-9.0.11.tar.gz)"
+
+# 4. 清理旧环境
+log_info "清理旧 Tomcat..."
+systemctl stop tomcat 2>/dev/null
+pkill -f tomcat 2>/dev/null
+rm -rf ${TOMCAT_HOME} ${INSTALL_BASE}/${TOMCAT_DIR}
+sleep 2
+
+# 5. 解压
+log_info "解压 Tomcat..."
+tar -zxf "/root/apache-tomcat-9.0.11.tar.gz" -C ${INSTALL_BASE}
+ln -sfn ${INSTALL_BASE}/${TOMCAT_DIR} ${TOMCAT_HOME}
+
+# 6. 权限 & 日志
+log_info "配置权限与日志目录..."
+mkdir -p ${TOMCAT_HOME}/logs ${TOMCAT_HOME}/temp
+touch ${TOMCAT_HOME}/logs/catalina.out
+chmod +x ${TOMCAT_HOME}/bin/*.sh
+chown -R root:root ${TOMCAT_HOME}
+
+# 7. JDK17 兼容配置
+log_info "配置 JDK17 启动参数..."
+cat > ${TOMCAT_HOME}/bin/setenv.sh <<EOF
+JAVA_HOME=/usr/local/jdk
+CATALINA_PID=${TOMCAT_HOME}/temp/tomcat.pid
+JAVA_OPTS="--add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED"
+EOF
+chmod +x ${TOMCAT_HOME}/bin/setenv.sh
+
+# ==================== 🎯 方案一标准 systemd 服务 ====================
+log_info "配置 systemd 服务（永不自动终止）..."
+cat > /etc/systemd/system/tomcat.service <<EOF
+[Unit]
+Description=Apache Tomcat
+After=network.target
+
+[Service]
+Type=forking
+PIDFile=${TOMCAT_HOME}/temp/tomcat.pid
+Environment="JAVA_HOME=/usr/local/jdk"
+Environment="CATALINA_PID=${TOMCAT_HOME}/temp/tomcat.pid"
+ExecStart=${TOMCAT_HOME}/bin/startup.sh
+ExecStop=${TOMCAT_HOME}/bin/shutdown.sh
+User=root
+Group=root
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+# =========================================================================
+
+# 8. 启动服务
+log_info "启动 Tomcat 服务..."
+systemctl daemon-reload
+systemctl enable tomcat
+systemctl start tomcat
+
+# 9. 最终检查
+sleep 5
+if systemctl is-active --quiet tomcat; then
+    log_info "================================================"
+    log_info "✅ Tomcat 启动成功！服务状态：正常运行（永不终止）"
+    log_info "✅ 访问地址：http://192.168.81.24:8080"
+    log_info "================================================"
+else
+    log_error "❌ 启动失败！执行：journalctl -u tomcat 查看日志"
+fi

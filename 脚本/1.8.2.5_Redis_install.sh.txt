@@ -1,0 +1,60 @@
+#!/bin/bash
+clear
+
+# ==================== Redis 最终脚本（按最后一次成功方案编写） ====================
+
+PASSWORD="qwe@123"
+LOG="/root/install_redis.log"
+
+RED='\033[31m'
+GREEN='\033[32m'
+NC='\033[0m'
+
+log() { echo -e "${GREEN}[INFO] $*${NC}" | tee -a $LOG; }
+err() { echo -e "${RED}[ERROR] $*${NC}" | tee -a $LOG; exit 1; }
+
+# 1. 检查ROOT
+[ $EUID -ne 0 ] && err "必须 root 执行"
+
+# 2. 安装
+log "安装Redis..."
+yum install -y epel-release
+yum install -y redis
+
+# 3. 停止冲突服务 + 清理残留PID（你最后成功的关键）
+log "清理残留进程..."
+systemctl stop redis 2>/dev/null
+pkill -9 -f redis-server 2>/dev/null
+rm -f /var/run/redis.pid
+rm -rf /etc/systemd/system/redis.service
+systemctl daemon-reload
+
+# 4. 写入配置（你最后成功的配置）
+log "配置Redis..."
+cat > /etc/redis.conf <<EOF
+daemonize yes
+bind 0.0.0.0
+requirepass qwe@123
+pidfile /var/run/redis.pid
+logfile /var/log/redis/redis.log
+dir /var/lib/redis
+EOF
+
+# 5. 权限修复
+mkdir -p /var/log/redis /var/lib/redis
+chown -R redis:redis /var/log/redis /var/lib/redis /etc/redis.conf
+
+# 6. 启动系统原生服务（你最后成功的方式）
+log "启动Redis服务..."
+systemctl enable redis
+systemctl start redis
+
+sleep 2
+if systemctl is-active --quiet redis; then
+    log "========================================"
+    log "✅ Redis 启动成功！"
+    log "✅ 密码：qwe@123"
+    log "========================================"
+else
+    err "❌ Redis 启动失败！"
+fi
